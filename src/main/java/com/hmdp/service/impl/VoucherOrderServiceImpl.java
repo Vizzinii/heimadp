@@ -9,14 +9,16 @@ import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.UserHolder;
+import org.springframework.aop.framework.AopContext;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
 
 /**
  * <p>
- *  服务实现类
+ * 服务实现类
  * </p>
  *
  * @author Vizzini
@@ -51,9 +53,29 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             // 库存不足
             return Result.fail("库存不足，不可下单。");
         }
+
+        Long userId = UserHolder.getUser().getId();
+
+        synchronized (userId.toString().intern()) {
+            // 原本是this.的方式调用的方法；但事务想要生效，还需要利用代理来生效
+            // 获取代理对象（事务）
+            // 获取锁后创建事务，释放锁前提交事务
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        }
+
+    }
+
+    @Transactional
+    public Result createVoucherOrder(Long voucherId) {
         // 5.实现一人一单逻辑
         // 5.1.用户id
         Long userId = UserHolder.getUser().getId();
+
+        // 给每个用户加一把锁，而不是所有用户共用一把锁。
+        // 那就要根据用户id来加锁。但是toString()底层是每次都new一个String对象。
+        // 所以intern()方法在字符串池里面寻找“值一样的字符串”并返回那一个的地址。
+        //synchronized (userId.toString().intern()) {
         Integer count = query().eq("user_id", userId).eq("voucher_id", voucherId).count();
         // 5.2.判断是否已经购买过
         if (count > 0) {
@@ -74,7 +96,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         // 判断 stock>0 来保证不会扣减库存至负数，解决超卖问题
         boolean success = seckillVoucherService.update()
                 .setSql("stock= stock -1")
-                .eq("voucher_id", voucherId).gt("stock",0).update(); //where id = ? and stock > 0
+                .eq("voucher_id", voucherId).gt("stock", 0).update(); //where id = ? and stock > 0
 
         if (!success) {
             // 扣减库存
@@ -93,7 +115,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         save(voucherOrder);
 
         return Result.ok(orderId);
-
+        //}
     }
 
 }
